@@ -24,6 +24,12 @@ if 'completed_tasks' not in st.session_state:
     st.session_state.completed_tasks = []
 if 'employee_performance' not in st.session_state:
     st.session_state.employee_performance = {}
+if 'employee_preferences' not in st.session_state:
+    st.session_state.employee_preferences = {}
+if 'task_history' not in st.session_state:
+    st.session_state.task_history = {}
+if 'learned_preferences' not in st.session_state:
+    st.session_state.learned_preferences = False
 
 def load_data():
     """Load the employee dataset"""
@@ -105,9 +111,37 @@ def update_employee_performance(employee_id, employee_name, task_priority, compl
     perf['avg_completion_time'] = perf['total_completion_time'] / perf['tasks_completed']
 
 # If data is loaded, display the application interface
+# Function to update task matcher with learned preferences
+def learn_employee_preferences():
+    """Analyze task history to learn employee task preferences"""
+    if not st.session_state.assigned_tasks:
+        return False
+    
+    # Only analyze if we have enough data and haven't already learned preferences
+    if len(st.session_state.assigned_tasks) >= 3 and not st.session_state.learned_preferences:
+        success = st.session_state.task_matcher.analyze_task_history(
+            st.session_state.assigned_tasks,
+            st.session_state.employee_performance
+        )
+        if success:
+            st.session_state.learned_preferences = True
+            return True
+    
+    return False
+
 if st.session_state.data_loaded:
     # Create tabs for different functionalities
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Assign Task", "Search by Skills", "View All Employees", "View Assigned Tasks", "Performance Leaderboard"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Assign Task", 
+        "Search by Skills", 
+        "View All Employees", 
+        "View Assigned Tasks", 
+        "Performance Leaderboard",
+        "Employee Preferences"
+    ])
+    
+    # Try to learn preferences from completed tasks
+    preferences_learned = learn_employee_preferences()
     
     with tab1:
         st.header("Assign a Task")
@@ -147,7 +181,39 @@ if st.session_state.data_loaded:
                     st.error("Please provide a task name")
                 else:
                     # Try to find a matching employee
-                    best_match = st.session_state.task_matcher.find_best_match(task_description, required_skills)
+                    # Pass manual preferences if available
+                    best_match = st.session_state.task_matcher.find_best_match(
+                        task_description, 
+                        required_skills,
+                        consider_preferences=True
+                    )
+                    
+                    # Update find_best_match implementation to use manual preferences
+                    if 'get_preference_score' in dir(st.session_state.task_matcher):
+                        # Get a reference to the original method
+                        original_method = st.session_state.task_matcher.get_preference_score
+                        
+                        # Define a wrapper that passes session state preferences
+                        def wrapped_preference_score(employee_id, required_skills, task_description, manual_preferences=None):
+                            return original_method(
+                                employee_id, 
+                                required_skills, 
+                                task_description, 
+                                manual_preferences=st.session_state.employee_preferences
+                            )
+                        
+                        # Replace the method temporarily for this call
+                        st.session_state.task_matcher.get_preference_score = wrapped_preference_score
+                        
+                        # Try to find a match again with the enhanced method
+                        best_match = st.session_state.task_matcher.find_best_match(
+                            task_description, 
+                            required_skills,
+                            consider_preferences=True
+                        )
+                        
+                        # Restore the original method
+                        st.session_state.task_matcher.get_preference_score = original_method
                     
                     if best_match:
                         employee_id, employee_name, match_score = best_match
@@ -200,6 +266,7 @@ if st.session_state.data_loaded:
                             'employee_name': employee_name,
                             'task_name': task_details['task_name'],
                             'task_description': task_details['task_description'],
+                            'required_skills': required_skills,
                             'priority': task_details['task_priority'],
                             'deadline': task_details['task_deadline'],
                             'timestamp': pd.Timestamp.now(),
@@ -463,6 +530,122 @@ if st.session_state.data_loaded:
                         st.write(f"✅ **{row['employee_name']}** - Completed {row['tasks_completed']} tasks with a {row['on_time_completion_rate']:.1f}% on-time rate")
         else:
             st.info("No performance data available yet. Complete some tasks to see the leaderboard.")
+            
+    with tab6:
+        st.header("Employee Preferences & AI Learning")
+        
+        # Display information about AI's learned preferences
+        st.subheader("Personalized Task Matching")
+        st.write("""
+        The AI task matching system learns from task assignments and completions to:
+        
+        1. Understand each employee's skill proficiency
+        2. Track performance metrics for different types of tasks
+        3. Identify which employees excel at specific skills or task types
+        4. Adjust future task assignments based on past performance
+        """)
+        
+        # Show preference learning status
+        if st.session_state.learned_preferences:
+            st.success("✅ The AI has learned employee preferences from task history")
+        else:
+            st.warning("⚠️ Not enough task history to learn preferences. Complete more tasks to enable personalized matching.")
+            if len(st.session_state.assigned_tasks) > 0:
+                st.progress(min(len(st.session_state.assigned_tasks) / 3, 0.99))
+                st.caption(f"Progress: {len(st.session_state.assigned_tasks)}/3 tasks needed")
+        
+        # Skill affinity display
+        if hasattr(st.session_state.task_matcher, 'skill_affinities') and st.session_state.task_matcher.skill_affinities:
+            st.subheader("Employee Skill Affinities")
+            
+            # Select an employee to view their preferences
+            all_employees = st.session_state.employee_manager.get_all_employees()
+            employee_names = all_employees['Name'].tolist()
+            employee_ids = all_employees['ID'].tolist()
+            
+            employee_select = st.selectbox(
+                "Select an employee to view their skill affinities",
+                options=employee_names,
+                index=None,
+                placeholder="Choose an employee..."
+            )
+            
+            if employee_select:
+                employee_id = employee_ids[employee_names.index(employee_select)]
+                
+                if employee_id in st.session_state.task_matcher.skill_affinities:
+                    st.success(f"Showing learned preferences for {employee_select}")
+                    
+                    # Convert skill affinities to DataFrame
+                    skills_data = []
+                    for skill, data in st.session_state.task_matcher.skill_affinities[employee_id].items():
+                        skills_data.append({
+                            'Skill': skill,
+                            'Tasks Completed': data['count'],
+                            'Average Completion Time (hours)': data.get('avg_completion_time', 'N/A')
+                        })
+                    
+                    if skills_data:
+                        skills_df = pd.DataFrame(skills_data)
+                        
+                        # Sort by task count
+                        skills_df = skills_df.sort_values('Tasks Completed', ascending=False)
+                        
+                        # Display the dataframe
+                        st.dataframe(skills_df)
+                        
+                        # Show skill affinity visualization
+                        st.subheader("Skill Preference Visualization")
+                        st.bar_chart(skills_df.set_index('Skill')['Tasks Completed'])
+                    else:
+                        st.info("No skill affinity data available for this employee yet.")
+                else:
+                    st.info("No preferences data available for this employee yet.")
+                    
+            # Display manual preference setting section
+            st.subheader("Manual Preference Management")
+            st.write("""
+            In addition to AI-learned preferences, you can manually set employee preferences 
+            for specific task types or skills to influence the matching algorithm.
+            """)
+            
+            # Form for manually setting preferences
+            with st.form(key="preference_form"):
+                emp_select = st.selectbox(
+                    "Employee",
+                    options=employee_names,
+                    index=None,
+                    placeholder="Select employee...",
+                    key="pref_employee"
+                )
+                
+                skill_select = st.multiselect(
+                    "Preferred Skills",
+                    options=st.session_state.employee_manager.get_all_skills(),
+                    placeholder="Select skills this employee prefers"
+                )
+                
+                preference_level = st.slider(
+                    "Preference Level",
+                    min_value=1,
+                    max_value=10,
+                    value=5,
+                    help="How strongly this employee prefers these skills (1 = low, 10 = high)"
+                )
+                
+                submit_pref = st.form_submit_button("Save Preferences")
+                
+                if submit_pref and emp_select and skill_select:
+                    emp_id = employee_ids[employee_names.index(emp_select)]
+                    
+                    # Store in session state
+                    if emp_id not in st.session_state.employee_preferences:
+                        st.session_state.employee_preferences[emp_id] = {}
+                    
+                    for skill in skill_select:
+                        st.session_state.employee_preferences[emp_id][skill] = preference_level
+                    
+                    st.success(f"Preferences saved for {emp_select}!")
     
     # Add a footer
     st.markdown("---")

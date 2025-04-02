@@ -20,6 +20,10 @@ if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'assigned_tasks' not in st.session_state:
     st.session_state.assigned_tasks = []
+if 'completed_tasks' not in st.session_state:
+    st.session_state.completed_tasks = []
+if 'employee_performance' not in st.session_state:
+    st.session_state.employee_performance = {}
 
 def load_data():
     """Load the employee dataset"""
@@ -66,10 +70,44 @@ if not st.session_state.data_loaded:
         else:
             st.error("Failed to load employee data. Please make sure the CSV file is in the correct location.")
 
+# Helper function to update employee performance metrics
+def update_employee_performance(employee_id, employee_name, task_priority, completion_time):
+    """Update employee performance metrics when a task is completed"""
+    if employee_id not in st.session_state.employee_performance:
+        st.session_state.employee_performance[employee_id] = {
+            'employee_id': employee_id,
+            'employee_name': employee_name,
+            'tasks_completed': 0,
+            'high_priority_completed': 0,
+            'medium_priority_completed': 0,
+            'low_priority_completed': 0,
+            'avg_completion_time': 0,
+            'total_completion_time': 0,
+            'on_time_completion_rate': 100.0,
+            'on_time_count': 0,
+            'late_count': 0
+        }
+    
+    # Update metrics
+    perf = st.session_state.employee_performance[employee_id]
+    perf['tasks_completed'] += 1
+    
+    # Update priority counts
+    if task_priority == 'High':
+        perf['high_priority_completed'] += 1
+    elif task_priority == 'Medium':
+        perf['medium_priority_completed'] += 1
+    else:
+        perf['low_priority_completed'] += 1
+    
+    # Update completion time metrics
+    perf['total_completion_time'] += completion_time.total_seconds() / (60 * 60 * 24)  # Convert to days
+    perf['avg_completion_time'] = perf['total_completion_time'] / perf['tasks_completed']
+
 # If data is loaded, display the application interface
 if st.session_state.data_loaded:
     # Create tabs for different functionalities
-    tab1, tab2, tab3, tab4 = st.tabs(["Assign Task", "Search by Skills", "View All Employees", "View Assigned Tasks"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Assign Task", "Search by Skills", "View All Employees", "View Assigned Tasks", "Performance Leaderboard"])
     
     with tab1:
         st.header("Assign a Task")
@@ -155,14 +193,17 @@ if st.session_state.data_loaded:
                     
                     if success:
                         # Add to assigned tasks in session state
+                        task_id = len(st.session_state.assigned_tasks) + 1
                         st.session_state.assigned_tasks.append({
+                            'task_id': task_id,
                             'employee_id': employee_id,
                             'employee_name': employee_name,
                             'task_name': task_details['task_name'],
                             'task_description': task_details['task_description'],
                             'priority': task_details['task_priority'],
                             'deadline': task_details['task_deadline'],
-                            'timestamp': pd.Timestamp.now()
+                            'timestamp': pd.Timestamp.now(),
+                            'status': 'In Progress'
                         })
                         st.success(f"Task '{task_details['task_name']}' successfully assigned to {employee_name}!")
                         
@@ -265,8 +306,8 @@ if st.session_state.data_loaded:
             tasks_df = tasks_df.sort_values('timestamp', ascending=False)
             
             # Format for display
-            display_tasks = tasks_df[['employee_name', 'task_name', 'priority', 'deadline', 'timestamp']]
-            display_tasks.columns = ['Employee', 'Task', 'Priority', 'Deadline', 'Assigned At']
+            display_tasks = tasks_df[['employee_name', 'task_name', 'priority', 'deadline', 'timestamp', 'status']]
+            display_tasks.columns = ['Employee', 'Task', 'Priority', 'Deadline', 'Assigned At', 'Status']
             
             # Apply styling based on priority
             def highlight_priority(s):
@@ -286,16 +327,143 @@ if st.session_state.data_loaded:
             
             if task_to_view:
                 task_details = tasks_df[tasks_df['task_name'] == task_to_view].iloc[0]
-                st.subheader(f"Task: {task_details['task_name']}")
-                st.write(f"**Assigned to:** {task_details['employee_name']}")
-                st.write(f"**Priority:** {task_details['priority']}")
-                st.write(f"**Deadline:** {task_details['deadline'].strftime('%Y-%m-%d')}")
-                st.write(f"**Assigned at:** {task_details['timestamp']}")
-                st.write("**Description:**")
-                st.write(task_details['task_description'])
+                task_id = task_details['task_id']
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.subheader(f"Task: {task_details['task_name']}")
+                    st.write(f"**Assigned to:** {task_details['employee_name']}")
+                    st.write(f"**Priority:** {task_details['priority']}")
+                    st.write(f"**Deadline:** {task_details['deadline'].strftime('%Y-%m-%d')}")
+                    st.write(f"**Assigned at:** {task_details['timestamp']}")
+                    st.write(f"**Status:** {task_details['status']}")
+                    st.write("**Description:**")
+                    st.write(task_details['task_description'])
+                
+                # Add task completion button if task is in progress
+                with col2:
+                    if task_details['status'] == 'In Progress':
+                        if st.button(f"Mark as Completed", key=f"complete_{task_id}"):
+                            # Get task index
+                            task_idx = next((i for i, task in enumerate(st.session_state.assigned_tasks) 
+                                           if task['task_id'] == task_id), None)
+                            
+                            if task_idx is not None:
+                                # Update task status
+                                st.session_state.assigned_tasks[task_idx]['status'] = 'Completed'
+                                st.session_state.assigned_tasks[task_idx]['completion_time'] = pd.Timestamp.now()
+                                
+                                # Calculate completion time
+                                assigned_time = task_details['timestamp']
+                                completion_time = pd.Timestamp.now()
+                                time_taken = completion_time - assigned_time
+                                
+                                # Check if completed on time
+                                deadline = pd.Timestamp(task_details['deadline'])
+                                on_time = completion_time <= deadline
+                                
+                                # Update employee performance metrics
+                                update_employee_performance(
+                                    task_details['employee_id'],
+                                    task_details['employee_name'],
+                                    task_details['priority'],
+                                    time_taken
+                                )
+                                
+                                # Update on-time completion rate
+                                if task_details['employee_id'] in st.session_state.employee_performance:
+                                    perf = st.session_state.employee_performance[task_details['employee_id']]
+                                    if on_time:
+                                        perf['on_time_count'] += 1
+                                    else:
+                                        perf['late_count'] += 1
+                                    
+                                    total_completed = perf['on_time_count'] + perf['late_count']
+                                    if total_completed > 0:
+                                        perf['on_time_completion_rate'] = (perf['on_time_count'] / total_completed) * 100
+                                
+                                st.success(f"Task marked as completed!")
+                                st.rerun()
         else:
             st.info("No tasks have been assigned yet.")
 
+    with tab5:
+        st.header("Performance Leaderboard")
+        
+        if st.session_state.employee_performance:
+            # Convert the performance data to a DataFrame
+            performance_data = list(st.session_state.employee_performance.values())
+            perf_df = pd.DataFrame(performance_data)
+            
+            # Create a scoring system
+            perf_df['performance_score'] = (
+                (perf_df['tasks_completed'] * 10) + 
+                (perf_df['high_priority_completed'] * 5) + 
+                (perf_df['medium_priority_completed'] * 3) + 
+                (perf_df['low_priority_completed'] * 1) -
+                (perf_df['avg_completion_time'] * 2) +
+                (perf_df['on_time_completion_rate'] * 0.5)
+            )
+            
+            # Sort by performance score (descending)
+            perf_df = perf_df.sort_values('performance_score', ascending=False)
+            
+            # Add rank column
+            perf_df['rank'] = range(1, len(perf_df) + 1)
+            
+            # Format for display
+            display_cols = [
+                'rank', 'employee_name', 'tasks_completed', 
+                'high_priority_completed', 'medium_priority_completed', 'low_priority_completed',
+                'avg_completion_time', 'on_time_completion_rate', 'performance_score'
+            ]
+            
+            display_df = perf_df[display_cols].copy()
+            
+            # Rename columns for display
+            display_df.columns = [
+                'Rank', 'Employee', 'Tasks Completed', 
+                'High Priority', 'Medium Priority', 'Low Priority',
+                'Avg. Completion Time (days)', 'On-time Rate (%)', 'Performance Score'
+            ]
+            
+            # Round numeric columns
+            display_df['Avg. Completion Time (days)'] = display_df['Avg. Completion Time (days)'].round(2)
+            display_df['On-time Rate (%)'] = display_df['On-time Rate (%)'].round(1)
+            display_df['Performance Score'] = display_df['Performance Score'].round(1)
+            
+            # Display top performers with highlighting
+            st.subheader("Employee Rankings")
+            st.write("Employees are ranked based on a performance score that considers task completion, task priority, completion time, and timeliness.")
+            
+            # Function to highlight top performers
+            def highlight_top_ranks(s):
+                is_rank = s.name == 'Rank'
+                return ['background-color: gold' if is_rank and val == 1
+                        else 'background-color: silver' if is_rank and val == 2
+                        else 'background-color: #cd7f32' if is_rank and val == 3
+                        else '' for val in s]
+            
+            st.dataframe(display_df.style.apply(highlight_top_ranks))
+            
+            # Display performance insights
+            st.subheader("Performance Insights")
+            
+            # Top performer
+            if not perf_df.empty:
+                top_performer = perf_df.iloc[0]
+                st.write(f"🏆 **Top Performer:** {top_performer['employee_name']} with {top_performer['tasks_completed']} tasks completed")
+                
+                # Most improved (could be based on recent activity)
+                st.write("### Promotion Recommendations")
+                st.write("Based on the performance metrics, the following employees might be considered for promotion:")
+                
+                for i, row in perf_df.head(3).iterrows():
+                    if row['tasks_completed'] >= 5 and row['on_time_completion_rate'] >= 80:
+                        st.write(f"✅ **{row['employee_name']}** - Completed {row['tasks_completed']} tasks with a {row['on_time_completion_rate']:.1f}% on-time rate")
+        else:
+            st.info("No performance data available yet. Complete some tasks to see the leaderboard.")
+    
     # Add a footer
     st.markdown("---")
     st.caption("AI Employee Task Assignment System | Developed with Streamlit")

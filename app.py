@@ -30,6 +30,14 @@ if 'task_history' not in st.session_state:
     st.session_state.task_history = {}
 if 'learned_preferences' not in st.session_state:
     st.session_state.learned_preferences = False
+if 'task_to_reassign' not in st.session_state:
+    st.session_state.task_to_reassign = None
+if 'selected_employee_id' not in st.session_state:
+    st.session_state.selected_employee_id = None
+if 'selected_employee_name' not in st.session_state:
+    st.session_state.selected_employee_name = None
+if 'selected_task_details' not in st.session_state:
+    st.session_state.selected_task_details = {}
 
 def load_data():
     """Load the employee dataset"""
@@ -52,11 +60,15 @@ def initialize_system():
     """Initialize the employee manager and task matcher"""
     df = load_data()
     if df is not None:
-        # Add availability status column if it doesn't exist
+        # Add required columns if they don't exist
         if 'Availability' not in df.columns:
             df['Availability'] = 'Free'
         if 'Current_Tasks' not in df.columns:
             df['Current_Tasks'] = ''
+        if 'Status_Emoji' not in df.columns:
+            df['Status_Emoji'] = '🟢'  # Default to free/green
+        if 'Task_Progress' not in df.columns:
+            df['Task_Progress'] = 0  # Progress percentage from 0-100
         
         # Initialize employee manager and task matcher
         st.session_state.employee_manager = EmployeeManager(df)
@@ -307,8 +319,12 @@ if st.session_state.data_loaded:
                            else 'background-color: #FF8787' for val in s]
                 
                 # Select columns to display
-                display_cols = ['ID', 'Name', 'Role', 'Position', 'Experience', 'Skills', 'Availability']
-                st.dataframe(matching_employees[display_cols].style.apply(
+                display_cols = ['ID', 'Name', 'Role', 'Position', 'Experience', 'Skills', 'Status_Emoji', 'Availability']
+                
+                # Prepare the dataframe with status emojis
+                display_df = matching_employees[display_cols].copy()
+                
+                st.dataframe(display_df.style.apply(
                     highlight_availability, subset=['Availability']
                 ))
             else:
@@ -356,8 +372,12 @@ if st.session_state.data_loaded:
                        else 'background-color: #FF8787' for val in s]
             
             # Select columns to display
-            display_cols = ['ID', 'Name', 'Role', 'Position', 'Experience', 'Skills', 'Availability']
-            st.dataframe(filtered_employees[display_cols].style.apply(
+            display_cols = ['ID', 'Name', 'Role', 'Position', 'Experience', 'Skills', 'Status_Emoji', 'Availability']
+            
+            # Prepare the dataframe with status emojis
+            display_df = filtered_employees[display_cols].copy()
+            
+            st.dataframe(display_df.style.apply(
                 highlight_availability, subset=['Availability']
             ))
         else:
@@ -372,9 +392,13 @@ if st.session_state.data_loaded:
             tasks_df['timestamp'] = pd.to_datetime(tasks_df['timestamp'])
             tasks_df = tasks_df.sort_values('timestamp', ascending=False)
             
+            # Add progress column if not exists
+            if 'progress' not in tasks_df.columns:
+                tasks_df['progress'] = 0
+                
             # Format for display
-            display_tasks = tasks_df[['employee_name', 'task_name', 'priority', 'deadline', 'timestamp', 'status']]
-            display_tasks.columns = ['Employee', 'Task', 'Priority', 'Deadline', 'Assigned At', 'Status']
+            display_tasks = tasks_df[['employee_name', 'task_name', 'priority', 'deadline', 'timestamp', 'status', 'progress']]
+            display_tasks.columns = ['Employee', 'Task', 'Priority', 'Deadline', 'Assigned At', 'Status', 'Progress (%)']
             
             # Apply styling based on priority
             def highlight_priority(s):
@@ -407,9 +431,48 @@ if st.session_state.data_loaded:
                     st.write("**Description:**")
                     st.write(task_details['task_description'])
                 
-                # Add task completion button if task is in progress
+                # Add task progress and completion buttons for in-progress tasks
                 with col2:
                     if task_details['status'] == 'In Progress':
+                        # Add progress slider
+                        if 'progress' not in task_details:
+                            task_progress = 0
+                        else:
+                            task_progress = task_details['progress']
+                            
+                        new_progress = st.slider(
+                            "Task Progress",
+                            min_value=0,
+                            max_value=100,
+                            value=int(task_progress),
+                            key=f"progress_{task_id}"
+                        )
+                        
+                        # Update progress if changed
+                        if new_progress != task_progress:
+                            # Get task index
+                            task_idx = next((i for i, task in enumerate(st.session_state.assigned_tasks) 
+                                          if task['task_id'] == task_id), None)
+                            
+                            if task_idx is not None:
+                                st.session_state.assigned_tasks[task_idx]['progress'] = new_progress
+                                
+                                # Update employee status based on progress
+                                employee_status = 'Partially Assigned'
+                                if new_progress > 75:
+                                    employee_status = 'Fully Assigned'  # Almost done but still busy
+                                elif new_progress < 25:
+                                    employee_status = 'Partially Assigned'  # Just started
+                                
+                                # Update employee status
+                                st.session_state.employee_manager.update_employee_availability(
+                                    task_details['employee_id'],
+                                    employee_status
+                                )
+                                
+                                st.success(f"Progress updated to {new_progress}%")
+                                st.rerun()
+                        
                         if st.button(f"Mark as Completed", key=f"complete_{task_id}"):
                             # Get task index
                             task_idx = next((i for i, task in enumerate(st.session_state.assigned_tasks) 
@@ -428,6 +491,14 @@ if st.session_state.data_loaded:
                                 # Check if completed on time
                                 deadline = pd.Timestamp(task_details['deadline'])
                                 on_time = completion_time <= deadline
+                                
+                                # Update employee status to completed for this task
+                                st.session_state.employee_manager.update_employee_task_status(
+                                    task_details['employee_id'],
+                                    task_id,
+                                    'Completed',
+                                    keep_assigned=False  # Free up the employee if no other tasks
+                                )
                                 
                                 # Update employee performance metrics
                                 update_employee_performance(
@@ -449,7 +520,77 @@ if st.session_state.data_loaded:
                                     if total_completed > 0:
                                         perf['on_time_completion_rate'] = (perf['on_time_count'] / total_completed) * 100
                                 
-                                st.success(f"Task marked as completed!")
+                                st.success(f"Task marked as completed! Employee status updated. ✅")
+                                st.rerun()
+                    elif task_details['status'] == 'In Progress':
+                        # Add reassign button
+                        if st.button("Reassign Task", key=f"reassign_{task_id}"):
+                            st.session_state.task_to_reassign = task_id
+                            st.rerun()
+                    
+                    # Handle reassignment if a task is selected for reassignment
+                    if 'task_to_reassign' in st.session_state and st.session_state.task_to_reassign == task_id:
+                        st.subheader("Reassign Task")
+                        
+                        # Get all available employees
+                        all_employees = st.session_state.employee_manager.get_all_employees()
+                        # Filter to only show Free or Partially Assigned employees
+                        available_employees = all_employees[all_employees['Availability'].isin(['Free', 'Partially Assigned'])]
+                        
+                        if not available_employees.empty:
+                            # Create dropdown to select new employee
+                            emp_names = available_employees['Name'].tolist()
+                            emp_ids = available_employees['ID'].tolist()
+                            
+                            new_employee = st.selectbox(
+                                "Select New Employee", 
+                                options=emp_names,
+                                index=None,
+                                placeholder="Choose an employee..."
+                            )
+                            
+                            if new_employee and st.button("Confirm Reassignment"):
+                                # Get the new employee ID
+                                new_emp_id = emp_ids[emp_names.index(new_employee)]
+                                
+                                # Get task index
+                                task_idx = next((i for i, task in enumerate(st.session_state.assigned_tasks) 
+                                             if task['task_id'] == task_id), None)
+                                
+                                if task_idx is not None:
+                                    # Update employee ID and name in task
+                                    st.session_state.assigned_tasks[task_idx]['employee_id'] = new_emp_id
+                                    st.session_state.assigned_tasks[task_idx]['employee_name'] = new_employee
+                                    
+                                    # Reset progress if there was any
+                                    st.session_state.assigned_tasks[task_idx]['progress'] = 0
+                                    
+                                    # Update old employee's status (free them up)
+                                    st.session_state.employee_manager.update_employee_task_status(
+                                        task_details['employee_id'],
+                                        task_id,
+                                        'Reassigned',
+                                        keep_assigned=False
+                                    )
+                                    
+                                    # Update new employee's status
+                                    st.session_state.employee_manager.update_employee_availability(
+                                        new_emp_id,
+                                        'Partially Assigned',
+                                        task_name=task_details['task_name']
+                                    )
+                                    
+                                    # Clear reassignment state
+                                    st.session_state.task_to_reassign = None
+                                    
+                                    st.success(f"Task reassigned to {new_employee}!")
+                                    st.rerun()
+                        else:
+                            st.warning("No available employees found for reassignment.")
+                            
+                            # Add option to cancel reassignment
+                            if st.button("Cancel Reassignment"):
+                                st.session_state.task_to_reassign = None
                                 st.rerun()
         else:
             st.info("No tasks have been assigned yet.")

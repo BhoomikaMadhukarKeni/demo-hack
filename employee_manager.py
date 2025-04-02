@@ -90,6 +90,19 @@ class EmployeeManager:
         
         return filtered_df
     
+    def get_status_emoji(self, status):
+        """Return an emoji representing the employee's status"""
+        if status == 'Free':
+            return '🟢'  # Green circle for free/not assigned
+        elif status == 'Partially Assigned':
+            return '🟡'  # Yellow circle for partially assigned
+        elif status == 'Fully Assigned':
+            return '🔴'  # Red circle for fully assigned
+        elif status == 'Completed':
+            return '✅'  # Checkmark for completed
+        else:
+            return '⚪'  # Default unknown status
+    
     def update_employee_availability(self, employee_id, new_status, task_name=None):
         """Update an employee's availability status and current task"""
         if employee_id in self.employee_df['ID'].values:
@@ -97,6 +110,9 @@ class EmployeeManager:
             
             # Update availability status
             self.employee_df.at[index, 'Availability'] = new_status
+            
+            # Add status emoji
+            self.employee_df.at[index, 'Status_Emoji'] = self.get_status_emoji(new_status)
             
             # Update current tasks if provided
             if task_name:
@@ -106,6 +122,27 @@ class EmployeeManager:
                     self.employee_df.at[index, 'Current_Tasks'] = task_name
                 else:
                     self.employee_df.at[index, 'Current_Tasks'] = f"{current_tasks}, {task_name}"
+            
+            return True
+        return False
+        
+    def update_employee_task_status(self, employee_id, task_id, task_status, keep_assigned=True):
+        """Update an employee's task status"""
+        if employee_id in self.employee_df['ID'].values:
+            index = self.employee_df[self.employee_df['ID'] == employee_id].index[0]
+            
+            # If task is completed and employee should be freed
+            if task_status == 'Completed' and not keep_assigned:
+                # Update employee status based on remaining tasks
+                current_tasks = self.employee_df.at[index, 'Current_Tasks']
+                if pd.isna(current_tasks) or current_tasks == '':
+                    # No tasks left, set to Free
+                    self.employee_df.at[index, 'Availability'] = 'Free'
+                    self.employee_df.at[index, 'Status_Emoji'] = self.get_status_emoji('Free')
+                else:
+                    # Still has other tasks, set to Partially Assigned
+                    self.employee_df.at[index, 'Availability'] = 'Partially Assigned'
+                    self.employee_df.at[index, 'Status_Emoji'] = self.get_status_emoji('Partially Assigned')
             
             return True
         return False

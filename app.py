@@ -88,6 +88,7 @@ if st.session_state.data_loaded:
                 options=["Low", "Medium", "High"]
             )
             task_name = st.text_input("Task Name", placeholder="Enter a name for this task")
+            task_deadline = st.date_input("Deadline", min_value=pd.Timestamp.now().date())
             
             # Store selected employee in session state for post-form processing
             if 'selected_employee_id' not in st.session_state:
@@ -120,7 +121,8 @@ if st.session_state.data_loaded:
                         st.session_state.selected_task_details = {
                             'task_name': task_name,
                             'task_description': task_description,
-                            'task_priority': task_priority
+                            'task_priority': task_priority,
+                            'task_deadline': task_deadline
                         }
                         
                         # Display employee details
@@ -159,6 +161,7 @@ if st.session_state.data_loaded:
                             'task_name': task_details['task_name'],
                             'task_description': task_details['task_description'],
                             'priority': task_details['task_priority'],
+                            'deadline': task_details['task_deadline'],
                             'timestamp': pd.Timestamp.now()
                         })
                         st.success(f"Task '{task_details['task_name']}' successfully assigned to {employee_name}!")
@@ -262,8 +265,8 @@ if st.session_state.data_loaded:
             tasks_df = tasks_df.sort_values('timestamp', ascending=False)
             
             # Format for display
-            display_tasks = tasks_df[['employee_name', 'task_name', 'priority', 'timestamp']]
-            display_tasks.columns = ['Employee', 'Task', 'Priority', 'Assigned At']
+            display_tasks = tasks_df[['employee_name', 'task_name', 'priority', 'deadline', 'timestamp']]
+            display_tasks.columns = ['Employee', 'Task', 'Priority', 'Deadline', 'Assigned At']
             
             # Apply styling based on priority
             def highlight_priority(s):
@@ -286,6 +289,7 @@ if st.session_state.data_loaded:
                 st.subheader(f"Task: {task_details['task_name']}")
                 st.write(f"**Assigned to:** {task_details['employee_name']}")
                 st.write(f"**Priority:** {task_details['priority']}")
+                st.write(f"**Deadline:** {task_details['deadline'].strftime('%Y-%m-%d')}")
                 st.write(f"**Assigned at:** {task_details['timestamp']}")
                 st.write("**Description:**")
                 st.write(task_details['task_description'])

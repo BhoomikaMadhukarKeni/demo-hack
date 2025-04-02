@@ -89,6 +89,14 @@ if st.session_state.data_loaded:
             )
             task_name = st.text_input("Task Name", placeholder="Enter a name for this task")
             
+            # Store selected employee in session state for post-form processing
+            if 'selected_employee_id' not in st.session_state:
+                st.session_state.selected_employee_id = None
+            if 'selected_employee_name' not in st.session_state:
+                st.session_state.selected_employee_name = None
+            if 'selected_task_details' not in st.session_state:
+                st.session_state.selected_task_details = {}
+                
             submit_button = st.form_submit_button(label="Find Best Match")
             
             if submit_button:
@@ -106,6 +114,15 @@ if st.session_state.data_loaded:
                         employee_id, employee_name, match_score = best_match
                         st.success(f"Best match found: {employee_name} (ID: {employee_id}) with a match score of {match_score:.2f}")
                         
+                        # Store selected employee and task details in session state
+                        st.session_state.selected_employee_id = employee_id
+                        st.session_state.selected_employee_name = employee_name
+                        st.session_state.selected_task_details = {
+                            'task_name': task_name,
+                            'task_description': task_description,
+                            'task_priority': task_priority
+                        }
+                        
                         # Display employee details
                         employee_details = st.session_state.employee_manager.get_employee_by_id(employee_id)
                         if employee_details is not None:
@@ -114,29 +131,47 @@ if st.session_state.data_loaded:
                             st.write(f"**Experience Level:** {employee_details['Experience']}")
                             st.write(f"**Skills:** {employee_details['Skills']}")
                             st.write(f"**Current Availability:** {employee_details['Availability']}")
-                            
-                            # Option to assign the task
-                            if st.button("Assign Task to This Employee"):
-                                success = st.session_state.task_matcher.assign_task(
-                                    employee_id, task_name, task_description, task_priority
-                                )
-                                if success:
-                                    # Add to assigned tasks in session state
-                                    st.session_state.assigned_tasks.append({
-                                        'employee_id': employee_id,
-                                        'employee_name': employee_name,
-                                        'task_name': task_name,
-                                        'task_description': task_description,
-                                        'priority': task_priority,
-                                        'timestamp': pd.Timestamp.now()
-                                    })
-                                    st.success(f"Task '{task_name}' successfully assigned to {employee_name}!")
-                                    # Force a rerun to update the interface
-                                    st.rerun()
-                                else:
-                                    st.error("Failed to assign task. Employee may be fully assigned.")
                     else:
                         st.warning("No suitable employee found for this task with the required skills.")
+        
+        # Add task assignment button outside the form
+        if st.session_state.selected_employee_id is not None:
+            # Create a container for the assignment button
+            assign_container = st.container()
+            with assign_container:
+                if st.button("Assign Task to This Employee"):
+                    employee_id = st.session_state.selected_employee_id
+                    employee_name = st.session_state.selected_employee_name
+                    task_details = st.session_state.selected_task_details
+                    
+                    success = st.session_state.task_matcher.assign_task(
+                        employee_id, 
+                        task_details['task_name'], 
+                        task_details['task_description'], 
+                        task_details['task_priority']
+                    )
+                    
+                    if success:
+                        # Add to assigned tasks in session state
+                        st.session_state.assigned_tasks.append({
+                            'employee_id': employee_id,
+                            'employee_name': employee_name,
+                            'task_name': task_details['task_name'],
+                            'task_description': task_details['task_description'],
+                            'priority': task_details['task_priority'],
+                            'timestamp': pd.Timestamp.now()
+                        })
+                        st.success(f"Task '{task_details['task_name']}' successfully assigned to {employee_name}!")
+                        
+                        # Reset the selected employee
+                        st.session_state.selected_employee_id = None
+                        st.session_state.selected_employee_name = None
+                        st.session_state.selected_task_details = {}
+                        
+                        # Force a rerun to update the interface
+                        st.rerun()
+                    else:
+                        st.error("Failed to assign task. Employee may be fully assigned.")
     
     with tab2:
         st.header("Search Employees by Skills")
